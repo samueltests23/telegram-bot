@@ -3,103 +3,130 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
-use Telegram\Bot\Laravel\Facades\Telegram;
-use App\Models\Faq;
 use App\Models\Conversation;
+use App\Models\Message;
+use App\Models\Faq;
 use App\Events\MessageSent;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class TelegramBotController extends Controller
 {
-    public function handle(Request $request)
+    public function handleWebhook(Request $request)
     {
-        // Registrar en logs exactamente lo que llega de Telegram
-        Log::info('Webhook Telegram recibido:', $request->all());
-
         try {
-            $update = Telegram::getWebhookUpdate();
+            $data = $request->all();
             
-            if (!$update->has('message')) {
-                Log::warning('Telegram update no tiene mensaje');
-                return response()->json(['status' => 'no_message']);
+            if (!isset($data['message']['text'])) {
+                return response()->json(['status' => 'success']);
             }
 
-            $message = $update->getMessage();
-            $chatId = $message->getChat()->getId();
-            $text = trim($message->getText());
-            $userName = $message->getFrom()->getFirstName() ?? 'Usuario';
+            $chatId = $data['message']['chat']['id'];
+            $text = trim($data['message']['text']);
+            $userName = $data['message']['from']['first_name'] ?? 'Usuario';
 
+            // 1. Obtener o crear conversación
             $conversation = Conversation::firstOrCreate(
                 ['telegram_chat_id' => $chatId],
-                ['status' => 'bot', 'user_name' => $userName]
+                ['user_name' => $userName, 'status' => 'bot']
             );
 
-            // Guardar mensaje recibido
-            $userMsg = $conversation->messages()->create([
+            // 2. Guardar mensaje del usuario en BD y notificar por Pusher al panel
+            $userMsg = Message::create([
+                'conversation_id' => $conversation->id,
                 'sender' => 'user',
                 'text' => $text,
             ]);
             
-            broadcast(new MessageSent($userMsg));
+            try {
+                broadcast(new MessageSent($userMsg))->toOthers();
+            } catch (\Exception $e) {
+                Log::error("Error Pusher: " . $e->getMessage());
+            }
 
+            $lowerText = mb_strtolower($text);
+
+            // 3. Reiniciar a modo 'bot' al escribir menú o comandos iniciales
+            if (in_array($lowerText, ['/start', 'hola', 'menu', 'menú', 'inicio'])) {
+                $conversation->update(['status' => 'bot']);
+                $replyText = $this->getMenuText($userName);
+                $this->saveAndSendBotMessage($conversation, $chatId, $replyText);
+                return response()->json(['status' => 'success']);
+            }
+
+            // 4. Si la conversación está asignada a un agente ('human'), el bot NO responde
             if ($conversation->status === 'human') {
-                return response()->json(['status' => 'ok']);
+                return response()->json(['status' => 'success']);
             }
 
-            $faqAnswer = $this->searchFaq($text);
+            // 5. Búsqueda en Faq (por número de opción o por coincidencia de texto)
+            $faq = null;
+            $faqs = Faq::all();
 
-            if ($faqAnswer) {
-                Telegram::sendMessage([
-                    'chat_id' => $chatId, 
-                    'text' => $faqAnswer
-                ]);
-
-                $botMsg = $conversation->messages()->create([
-                    'sender' => 'bot', 
-                    'text' => $faqAnswer
-                ]);
-                
-                broadcast(new MessageSent($botMsg));
+            if (is_numeric($text)) {
+                $index = ((int)$text) - 1;
+                if (isset($faqs[$index])) {
+                    $faq = $faqs[$index];
+                }
             } else {
-                $conversation->update(['status' => 'human']);
-                $transferMessage = "No encontré una respuesta exacta. Te he transferido con un agente de nuestra gerencia.";
-
-                Telegram::sendMessage([
-                    'chat_id' => $chatId, 
-                    'text' => $transferMessage
-                ]);
-
-                $botMsg = $conversation->messages()->create([
-                    'sender' => 'bot', 
-                    'text' => $transferMessage
-                ]);
-
-                broadcast(new MessageSent($botMsg));
+                $faq = Faq::where('question', 'LIKE', "%{$text}%")->first();
             }
 
-            return response()->json(['status' => 'ok']);
+            if ($faq) {
+                $replyText = $faq->answer;
+            } else {
+                // Transferir a agente usando el valor 'human'
+                $conversation->update(['status' => 'human']);
+                $replyText = "👨‍💻 No encontré esa opción. Te he derivado con un agente humano y te responderemos a la brevedad.";
+            }
+
+            $this->saveAndSendBotMessage($conversation, $chatId, $replyText);
+
+            return response()->json(['status' => 'success']);
 
         } catch (\Exception $e) {
-            Log::error('Error procesando Webhook de Telegram: ' . $e->getMessage());
-            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+            Log::error("Error crítico en Telegram Webhook: " . $e->getMessage());
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 200);
         }
     }
 
-    private function searchFaq(string $text): ?string
+    private function getMenuText($userName)
     {
         $faqs = Faq::all();
-        foreach ($faqs as $faq) {
-            if (mb_stripos($text, $faq->question) !== false) {
-                return $faq->answer;
+
+        $menu = "👋 ¡Hola, {$userName}! Bienvenido a nuestro servicio de atención.\n\n";
+        $menu .= "Escribe el número de la opción que deseas consultar:\n\n";
+
+        if ($faqs->count() > 0) {
+            foreach ($faqs as $index => $faq) {
+                $number = $index + 1;
+                $menu .= "{$number}. {$faq->question}\n";
             }
-            if ($faq->keywords) {
-                foreach (explode(',', $faq->keywords) as $keyword) {
-                    if (mb_stripos($text, trim($keyword)) !== false) {
-                        return $faq->answer;
-                    }
-                }
-            }
+        } else {
+            $menu .= "No hay preguntas frecuentes registradas.\n";
         }
-        return null;
+
+        $menu .= "\n💬 O escribe tu duda directamente para hablar con un agente.";
+
+        return $menu;
+    }
+
+    private function saveAndSendBotMessage($conversation, $chatId, $replyText)
+    {
+        $botMsg = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender' => 'bot',
+            'text' => $replyText,
+        ]);
+
+        try {
+            broadcast(new MessageSent($botMsg))->toOthers();
+        } catch (\Exception $e) {}
+
+        $token = env('TELEGRAM_BOT_TOKEN');
+        Http::post("https://api.telegram.org/bot{$token}/sendMessage", [
+            'chat_id' => $chatId,
+            'text' => $replyText,
+        ]);
     }
 }

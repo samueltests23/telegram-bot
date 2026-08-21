@@ -10,7 +10,7 @@
 <body class="bg-gray-100 h-screen flex flex-col">
     <header class="bg-blue-800 text-white p-4 font-bold shadow flex justify-between items-center">
         <span>Panel de Atención (Telegram)</span>
-        <span class="text-xs bg-green-500 text-white px-2 py-1 rounded-full font-normal">● Reverb Activo</span>
+        <span class="text-xs bg-green-500 text-white px-2 py-1 rounded-full font-normal">● Pusher Activo</span>
     </header>
 
     <div class="flex flex-1 overflow-hidden">
@@ -48,7 +48,6 @@
 
                 <div id="messages-container" class="flex-1 p-4 overflow-y-auto space-y-4">
                     @php
-                        // Evita el error si la variable se llamaba $messages en lugar de $activeMessages
                         $chatMessages = $activeMessages ?? $conversation->messages ?? [];
                     @endphp
 
@@ -73,17 +72,14 @@
         </main>
     </div>
 
-    <!-- CONEXIÓN DE WEBSOCKETS (REVERB) -->
+    <!-- CONEXIÓN DE WEBSOCKETS (PUSHER) -->
     <script>
-        // Configuración para conectarse por el puerto 8080 público de Codespaces
+        // Inicialización nativa de Pusher con tus llaves reales
         window.Echo = new Echo({
-            broadcaster: 'reverb',
-            key: '{{ config("broadcasting.connections.reverb.key", "my-app-key") }}',
-            wsHost: 'ominous-space-giggle-qv9x9jgrpvjrc4wqp-8080.app.github.dev',
-            wsPort: 443,
-            wssPort: 443,
-            forceTLS: true,
-            enabledTransports: ['ws', 'wss'],
+            broadcaster: 'pusher',
+            key: '8a202d012a31b981f250',
+            cluster: 'us2',
+            forceTLS: true
         });
 
         const activeConvElement = document.getElementById('active-conversation-id');
@@ -103,7 +99,7 @@
             }
         });
 
-        // 2. Escuchar mensajes del chat actualmente abierto
+        // 2. Escuchar mensajes del chat activo en tiempo real
         if (activeConversationId) {
             window.Echo.channel(`chat.${activeConversationId}`).listen('.message.sent', (e) => {
                 const messagesContainer = document.getElementById('messages-container');
