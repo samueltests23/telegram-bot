@@ -57,7 +57,7 @@ class AgentPanelController extends Controller
         $token = env('TELEGRAM_BOT_TOKEN');
         Http::post("https://api.telegram.org/bot{$token}/sendMessage", [
             'chat_id' => $conversation->telegram_chat_id,
-            'text' => "La atención con el agente ha finalizado. Has vuelto al asistente automático.",
+            'text' => "La atención con el asesor ha finalizado. Has vuelto al asistente automático.",
         ]);
 
         // Redirección segura de vuelta a la pantalla previa del panel
