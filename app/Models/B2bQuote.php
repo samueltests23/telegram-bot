@@ -5,19 +5,16 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-class Conversation extends Model
+class B2bQuote extends Model
 {
     use HasFactory;
 
     protected $fillable = [
         'telegram_chat_id',
-        'user_name',
+        'company_name',
+        'rif',
+        'employees_count',
+        'area_interest',
         'status',
-        'step',
     ];
-
-    public function messages()
-    {
-        return $this->hasMany(Message::class);
-    }
 }
